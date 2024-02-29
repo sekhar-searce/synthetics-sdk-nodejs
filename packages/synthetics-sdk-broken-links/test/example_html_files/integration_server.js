@@ -15,6 +15,9 @@
 const functions = require('@google-cloud/functions-framework');
 const SyntheticsSdkBrokenLinks = require('synthetics-sdk-broken-links');
 const path = require('path');
+// const proxyquire = require('proxyquire');
+
+// const brokenLinksSdkMocked = proxyquire
 
 /*
  * This is the server template that is required to run a synthetic monitor in

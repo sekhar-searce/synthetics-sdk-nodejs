@@ -120,12 +120,12 @@ describe('GCM Synthetics Broken Links Navigation Functionality', async () => {
     let pageStub: sinon.SinonStubbedInstance<Page>;
 
     beforeEach(() => {
-        pageStub = sinon.createStubInstance(Page);
-        pageStub.url.returns('fake-current-uri');
+      pageStub = sinon.createStubInstance(Page);
+      pageStub.url.returns('fake-current-uri');
     });
 
     afterEach(() => {
-        sinon.restore();
+      sinon.restore();
     });
 
     it('should pass after retries', async () => {

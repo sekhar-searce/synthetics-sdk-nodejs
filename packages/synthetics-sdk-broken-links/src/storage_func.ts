@@ -14,6 +14,7 @@
 
 import * as path from 'path';
 import { Storage, Bucket } from '@google-cloud/storage';
+import { Page } from 'puppeteer';
 import {
   BaseError,
   BrokenLinksResultV1_BrokenLinkCheckerOptions,
@@ -134,8 +135,7 @@ export function createStorageClientIfStorageSelected(
  * @returns An ApiScreenshotOutput object indicating success or a screenshot_error.
  */
 export async function uploadScreenshotToGCS(
-  screenshot: Buffer,
-  filename: string,
+  page: Page,
   storageParams: StorageParameters,
   options: BrokenLinksResultV1_BrokenLinkCheckerOptions
 ): Promise<ApiScreenshotOutput> {
@@ -143,11 +143,16 @@ export async function uploadScreenshotToGCS(
     screenshot_file: '',
     screenshot_error: {} as BaseError,
   };
+  let filename = '';
   try {
     // Early exit if storage is not properly configured
     if (!storageParams.storageClient || !storageParams.bucket) {
       return screenshot_output;
     }
+
+    const screenshot: Buffer = await page.screenshot({ encoding: 'binary' });
+    console.log('what is the screnshot', screenshot.toString());
+    filename = 'test-file-name.png'; // TODO pending YAQs
 
     // Construct the destination path within the bucket if given
     let writeDestination = options.screenshot_options!.storage_location
@@ -178,8 +183,8 @@ export async function uploadScreenshotToGCS(
     // Handle upload errors
     if (err instanceof Error) process.stderr.write(err.message);
     screenshot_output.screenshot_error = {
-      error_type: 'StorageFileUploadError',
-      error_message: `Failed to upload screenshot for ${filename}. Please reference server logs for further information.`,
+      error_type: 'ScreenshotFileUploadError',
+      error_message: `Failed to take and/or upload screenshot for ${await page.url()}. Please reference server logs for further information.`,
     };
   }
 

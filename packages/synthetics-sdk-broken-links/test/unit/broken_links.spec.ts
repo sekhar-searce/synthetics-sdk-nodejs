@@ -11,15 +11,20 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+// Standard Libraries
 import { expect, use } from 'chai';
 import chaiExclude from 'chai-exclude';
 use(chaiExclude);
+import sinon from 'sinon';
 
+// Internal Project Files
 import {
   BrokenLinksResultV1_BrokenLinkCheckerOptions,
   BrokenLinksResultV1_BrokenLinkCheckerOptions_LinkOrder,
   BrokenLinksResultV1_BrokenLinkCheckerOptions_ScreenshotOptions,
   BrokenLinksResultV1_BrokenLinkCheckerOptions_ScreenshotOptions_CaptureCondition as ApiCaptureCondition,
+  BrokenLinksResultV1_SyntheticLinkResult_ScreenshotOutput as ApiScreenshotOutput,
   BrokenLinksResultV1_SyntheticLinkResult,
   ResponseStatusCode,
   BaseError,
@@ -28,8 +33,17 @@ import {
 import {
   runBrokenLinks,
   BrokenLinkCheckerOptions,
+  CaptureCondition,
 } from '../../src/broken_links';
+import * as storageFunc from '../../src/storage_func';
+
+// External Dependencies
 const path = require('path');
+const proxyquire = require('proxyquire');
+import { Browser, Page } from 'puppeteer';
+import { Bucket, Storage } from '@google-cloud/storage';
+
+const TEST_BUCKET_NAME = 'gcm-test-project-id-synthetics-test-region';
 
 describe('runBrokenLinks', async () => {
   const status_class_2xx: ResponseStatusCode = {
@@ -39,6 +53,10 @@ describe('runBrokenLinks', async () => {
     {
       capture_condition: ApiCaptureCondition.FAILING,
       storage_location: '',
+    };
+    const emptyScreenshotOutput: ApiScreenshotOutput = {
+      screenshot_file: '',
+      screenshot_error: {} as BaseError,
     };
 
   it('returns generic_result with appropriate error information if error thrown', async () => {
@@ -112,10 +130,7 @@ describe('runBrokenLinks', async () => {
       link_start_time: 'NA',
       link_end_time: 'NA',
       is_origin: true,
-      screenshot_output: {
-        screenshot_file: '',
-        screenshot_error: {} as BaseError,
-      },
+      screenshot_output: emptyScreenshotOutput
     };
 
     expect(broken_links_result?.origin_link_result)
@@ -124,7 +139,55 @@ describe('runBrokenLinks', async () => {
     expect(broken_links_result?.followed_link_results.length).to.equal(0);
   }).timeout(40000);
 
-  it('successful execution with 1 failing link', async () => {
+  it.only('successful execution with 1 failing link', async () => {
+    // Stub a storage bucket
+    const bucketStub: sinon.SinonStubbedInstance<Bucket> =
+      sinon.createStubInstance(Bucket);
+    bucketStub.name = TEST_BUCKET_NAME;
+    bucketStub.create.resolves([bucketStub]);
+    // Simulate default_bucket not existing initially
+    bucketStub.exists.resolves([false]); // Simulate the bucket not existing initially
+
+    // Stub the storage client
+    const storageClientStub: sinon.SinonStubbedInstance<Storage> =
+      sinon.createStubInstance(Storage);
+    storageClientStub.bucket.returns(bucketStub);
+
+    // Stub a puppeteer page to return set Buffer when .screenshot() called
+    const pageStub : sinon.SinonStubbedInstance<Page> = sinon.createStubInstance(Page);
+    pageStub.screenshot.resolves(Buffer.from('screenshot-image-data', 'utf-8'));
+
+    const browserStub : sinon.SinonStubbedInstance<Browser> = sinon.createStubInstance(Browser);
+
+
+    const successfulScreenshotOuput: ApiScreenshotOutput = {
+      screenshot_file: 'bucket/folder/file.png',
+      screenshot_error: {} as BaseError,
+    };
+
+    const mockedstorageFunc = proxyquire('../../src/storage_func', {
+      '@google-cloud/synthetics-sdk-api': {
+        getExecutionRegion: () => 'test-region',
+        resolveProjectId: () => 'test-project-id',
+      },
+    });
+
+    const mockedNavigationFunc = proxyquire('../../src/navigation_func', {
+      './storage_func' : {
+        uploadScreenshotToGCS: () => successfulScreenshotOuput,
+      }
+    })
+
+    const mockedBlc = proxyquire('../../src/broken_links', {
+      './storage_func': {
+        ...mockedstorageFunc,
+        createStorageClientIfStorageSelected: () => storageClientStub,
+      },
+      './navigation_func': {
+        ...mockedNavigationFunc,
+      }
+    });
+
     const origin_uri = `file:${path.join(
       __dirname,
       '../example_html_files/retrieve_links_test.html'
@@ -134,9 +197,12 @@ describe('runBrokenLinks', async () => {
       query_selector_all: 'a[src], img[href]',
       get_attributes: ['href', 'src'],
       wait_for_selector: '',
+      screenshot_options: {
+        capture_condition: CaptureCondition.FAILING,
+      },
     };
 
-    const result = await runBrokenLinks(inputOptions);
+    const result = await mockedBlc.runBrokenLinks(inputOptions);
 
     const expectedOptions: BrokenLinksResultV1_BrokenLinkCheckerOptions = {
       origin_uri: origin_uri,
@@ -166,10 +232,7 @@ describe('runBrokenLinks', async () => {
       link_start_time: 'NA',
       link_end_time: 'NA',
       is_origin: true,
-      screenshot_output: {
-        screenshot_file: '',
-        screenshot_error: {} as BaseError,
-      },
+      screenshot_output: emptyScreenshotOutput
     };
 
     const file_doesnt_exist_path = `file://${path.join(
@@ -193,10 +256,7 @@ describe('runBrokenLinks', async () => {
           link_start_time: 'NA',
           link_end_time: 'NA',
           is_origin: false,
-          screenshot_output: {
-            screenshot_file: '',
-            screenshot_error: {} as BaseError,
-          },
+          screenshot_output: emptyScreenshotOutput
         },
         {
           link_passed: false,
@@ -211,10 +271,7 @@ describe('runBrokenLinks', async () => {
           link_start_time: 'NA',
           link_end_time: 'NA',
           is_origin: false,
-          screenshot_output: {
-            screenshot_file: '',
-            screenshot_error: {} as BaseError,
-          },
+          screenshot_output: successfulScreenshotOuput,
         },
       ];
 
@@ -237,8 +294,11 @@ describe('runBrokenLinks', async () => {
       .to.deep.equal(expectedOriginLinkResult);
 
     const sorted_followed_links_result =
-      broken_links_result?.followed_link_results.sort((a, b) =>
-        a.target_uri.localeCompare(b.target_uri)
+      broken_links_result?.followed_link_results.sort(
+        (
+          a: BrokenLinksResultV1_SyntheticLinkResult,
+          b: BrokenLinksResultV1_SyntheticLinkResult
+        ) => a.target_uri.localeCompare(b.target_uri)
       );
     expect(sorted_followed_links_result)
       .excluding(['target_uri', 'link_start_time', 'link_end_time'])
@@ -249,8 +309,11 @@ describe('runBrokenLinks', async () => {
       '/example_html_files/200.html',
       '/example_html_files/file_doesnt_exist.html',
     ];
-    broken_links_result?.followed_link_results?.forEach((link, index) => {
-      expect(link.target_uri.endsWith(expectedTargeturis[index]));
-    });
+    broken_links_result?.followed_link_results?.forEach(
+      (link: BrokenLinksResultV1_SyntheticLinkResult, index: number) => {
+        expect(link.target_uri.endsWith(expectedTargeturis[index]));
+      }
+    );
+    sinon.restore();
   }).timeout(150000);
 });

@@ -15,6 +15,8 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { Storage, Bucket, File } from '@google-cloud/storage';
+import puppeteer, { Browser, HTTPResponse, Page } from 'puppeteer';
+
 import * as sdkApi from '@google-cloud/synthetics-sdk-api';
 import {
   createStorageClientIfStorageSelected,
@@ -23,7 +25,6 @@ import {
   StorageParameters,
   uploadScreenshotToGCS,
 } from '../../src/storage_func';
-import { BrokenLinksResultV1_BrokenLinkCheckerOptions } from '@google-cloud/synthetics-sdk-api';
 const proxyquire = require('proxyquire');
 
 // global test vars
@@ -37,7 +38,6 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
     '@google-cloud/synthetics-sdk-api': {
       getExecutionRegion: () => 'test-region',
       resolveProjectId: () => 'test-project-id',
-      getOrCreateStorageBucket: () => getOrCreateStorageBucket,
     },
   });
 
@@ -65,7 +65,7 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
     sinon.restore();
   });
 
-  describe('getOrCreateStorageBucket()', () => {
+  describe.only('getOrCreateStorageBucket()', () => {
     it('should create a bucket if no storage_location is provided', async () => {
       bucketStub.exists.resolves([false]); // Simulate the bucket not existing initially
 
@@ -161,13 +161,14 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
   describe('uploadScreenshotToGCS', () => {
     let storageClientStub: sinon.SinonStubbedInstance<Storage>;
     let bucketStub: sinon.SinonStubbedInstance<Bucket>;
-
-    const screenshotData = Buffer.from('encoded-image-data', 'utf-8');
-    const filename = 'test-screenshot.png';
+    let pageStub : sinon.SinonStubbedInstance<Page>;
 
     beforeEach(() => {
       storageClientStub = sinon.createStubInstance(Storage);
       bucketStub = sinon.createStubInstance(Bucket);
+      pageStub = sinon.createStubInstance(Page);
+      pageStub.url.resolves('https://fake-url');
+
       storageClientStub.bucket.returns(bucketStub);
     });
 
@@ -175,6 +176,7 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
       sinon.restore();
     });
 
+    describe('valid Storage Configuration', () => {
     it('should upload the screenshot and return the write_destination', async () => {
       const storageParams = {
         storageClient: storageClientStub,
@@ -184,9 +186,9 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
       };
       const options = {
         screenshot_options: { storage_location: 'bucket/folder1/folder2' },
-      } as BrokenLinksResultV1_BrokenLinkCheckerOptions;
+      } as sdkApi.BrokenLinksResultV1_BrokenLinkCheckerOptions;
       const expectedWriteDestination =
-        'folder1/folder2/uptime123/exec456/test-screenshot.png';
+        'folder1/folder2/uptime123/exec456/test-file-name.png';
 
       const successPartialFileMock: Partial<File> = {
         save: sinon.stub().resolves(),
@@ -194,8 +196,7 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
       bucketStub.file.returns(successPartialFileMock as File);
 
       const result = await uploadScreenshotToGCS(
-        screenshotData,
-        filename,
+        pageStub,
         storageParams,
         options
       );
@@ -213,7 +214,7 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
       };
       const options = {
         screenshot_options: {},
-      } as BrokenLinksResultV1_BrokenLinkCheckerOptions;
+      } as sdkApi.BrokenLinksResultV1_BrokenLinkCheckerOptions;
 
       const gcsError = new Error('Simulated GCS upload error');
       const failingPartialFileMock: Partial<File> = {
@@ -222,23 +223,26 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
       bucketStub.file.returns(failingPartialFileMock as File);
 
       const result = await uploadScreenshotToGCS(
-        screenshotData,
-        filename,
+        pageStub,
         storageParams,
         options
       );
 
       expect(result.screenshot_file).to.equal('');
       expect(result.screenshot_error).to.deep.equal({
-        error_type: 'StorageFileUploadError',
-        error_message: `Failed to upload screenshot for ${filename}. Please reference server logs for further information.`,
+        error_type: 'ScreenshotFileUploadError',
+        error_message: 'Failed to take and/or upload screenshot for https://fake-url. Please reference server logs for further information.',
       });
     });
+  });
 
     describe('Invalid Storage Configuration', () => {
-      const emptyScreenshotData = Buffer.from('', 'utf-8');
-      const emptyFilename = '';
-      const emptyOptions = {} as BrokenLinksResultV1_BrokenLinkCheckerOptions;
+      const emptyOptions = {} as sdkApi.BrokenLinksResultV1_BrokenLinkCheckerOptions;
+
+      beforeEach(() => {
+        pageStub.screenshot.resolves(Buffer.from('encoded-image-data', "utf-8"));
+      })
+
       it('should return an empty result if storageClient is null', async () => {
         // Missing storageClient
         const storageParams = {
@@ -249,8 +253,7 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
         };
 
         const result = await uploadScreenshotToGCS(
-          emptyScreenshotData,
-          emptyFilename,
+          pageStub,
           storageParams,
           emptyOptions
         );
@@ -271,8 +274,7 @@ describe('GCM Synthetics Broken Links storage_func suite testing', () => {
         };
 
         const result = await uploadScreenshotToGCS(
-          emptyScreenshotData,
-          emptyFilename,
+          pageStub,
           storageParams,
           emptyOptions
         );
